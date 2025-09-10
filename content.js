@@ -1,57 +1,75 @@
 // 监听来自background script的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "capture") {
-    captureFullPage();
+    captureFullPage().then(() => {
+      // 截图完成，发送响应给popup
+      sendResponse({success: true});
+    }).catch((error) => {
+      console.error('Capture failed:', error);
+      sendResponse({success: false, error: error.message});
+    });
+    
+    // 返回true以保持消息通道开放，直到sendResponse被调用
+    return true;
   }
 });
 
 function captureFullPage() {
-  // 获取页面完整尺寸
-  const dimensions = ScreenshotUtils.getPageDimensions();
-  const fullHeight = dimensions.height;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-  
-  // 计算需要滚动的次数
-  const scrolls = Math.ceil(fullHeight / viewportHeight);
-  
-  // 存储截图数据
-  const screenshots = [];
-  
-  // 逐屏滚动并截图
-  let scrollCount = 0;
-  
-  function captureNext() {
-    if (scrollCount < scrolls) {
-      // 滚动到指定位置
-      window.scrollTo(0, scrollCount * viewportHeight);
+  return new Promise((resolve, reject) => {
+    try {
+      // 获取页面完整尺寸
+      const dimensions = ScreenshotUtils.getPageDimensions();
+      const fullHeight = dimensions.height;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
       
-      // 等待页面渲染完成
-      setTimeout(() => {
-        // 捕获当前视口截图
-        ScreenshotUtils.captureViewport().then(dataUrl => {
-          screenshots.push({
-            dataUrl: dataUrl,
-            position: scrollCount * viewportHeight
-          });
+      // 计算需要滚动的次数
+      const scrolls = Math.ceil(fullHeight / viewportHeight);
+      
+      // 存储截图数据
+      const screenshots = [];
+      
+      // 逐屏滚动并截图
+      let scrollCount = 0;
+      
+      function captureNext() {
+        if (scrollCount < scrolls) {
+          // 滚动到指定位置
+          window.scrollTo(0, scrollCount * viewportHeight);
           
-          scrollCount++;
-          captureNext();
-        });
-      }, 500); // 等待500ms确保动态内容加载完成
-    } else {
-      // 所有截图完成，开始合并
-      ScreenshotUtils.mergeScreenshots(screenshots, fullHeight, viewportHeight, viewportWidth).then(dataUrl => {
-        // 将完整截图发送给background script保存
-        chrome.runtime.sendMessage({
-          action: "saveScreenshot",
-          dataUrl: dataUrl
-        });
-      });
+          // 等待页面渲染完成
+          setTimeout(() => {
+            // 捕获当前视口截图
+            ScreenshotUtils.captureViewport().then(dataUrl => {
+              screenshots.push({
+                dataUrl: dataUrl,
+                position: scrollCount * viewportHeight
+              });
+              
+              scrollCount++;
+              captureNext();
+            }).catch(reject);
+          }, 500); // 等待500ms确保动态内容加载完成
+        } else {
+          // 所有截图完成，开始合并
+          ScreenshotUtils.mergeScreenshots(screenshots, fullHeight, viewportHeight, viewportWidth).then(dataUrl => {
+            // 将完整截图发送给background script保存
+            chrome.runtime.sendMessage({
+              action: "saveScreenshot",
+              dataUrl: dataUrl
+            });
+            
+            // 截图完成
+            resolve();
+          }).catch(reject);
+        }
+      }
+      
+      captureNext();
+    } catch (error) {
+      reject(error);
     }
-  }
-  
-  captureNext();
+  });
 }
 
 function captureViewport() {
